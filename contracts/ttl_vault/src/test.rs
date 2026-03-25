@@ -78,3 +78,38 @@ fn test_update_beneficiary() {
     let vault = client.get_vault(&vault_id);
     assert_eq!(vault.beneficiary, new_beneficiary);
 }
+
+#[test]
+#[should_panic(expected = "vault already released")]
+fn test_update_beneficiary_after_release_fails() {
+    let (env, owner, beneficiary) = setup();
+    let client = TtlVaultContractClient::new(&env, &env.register_contract(None, TtlVaultContract));
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &86400u64);
+
+    // Advance time past the check-in interval to expire the vault
+    env.ledger().with_mut(|l| l.timestamp += 90000);
+    client.trigger_release(&vault_id);
+
+    // Attempt to update beneficiary on a Released vault — must panic
+    let new_beneficiary = Address::generate(&env);
+    client.update_beneficiary(&vault_id, &new_beneficiary);
+}
+
+#[test]
+fn test_update_beneficiary_while_locked_near_expiry() {
+    let (env, owner, beneficiary) = setup();
+    let client = TtlVaultContractClient::new(&env, &env.register_contract(None, TtlVaultContract));
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &86400u64);
+
+    // Advance time to just before expiry — vault is still Locked
+    env.ledger().with_mut(|l| l.timestamp += 86399);
+    assert!(!client.is_expired(&vault_id));
+
+    let new_beneficiary = Address::generate(&env);
+    client.update_beneficiary(&vault_id, &new_beneficiary);
+
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.beneficiary, new_beneficiary);
+}

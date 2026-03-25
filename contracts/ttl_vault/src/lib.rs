@@ -152,6 +152,12 @@ impl TtlVaultContract {
     pub fn update_beneficiary(env: Env, vault_id: u64, new_beneficiary: Address) {
         let mut vault: Vault = Self::load_vault(&env, vault_id);
         vault.owner.require_auth();
+
+        assert!(
+            vault.status == ReleaseStatus::Locked,
+            "vault already released"
+        );
+
         vault.beneficiary = new_beneficiary;
         env.storage()
             .persistent()
