@@ -1,4 +1,6 @@
-use soroban_sdk::{contracttype, Address, Symbol, Env};
+use soroban_sdk::{contracttype, symbol_short, Address, Symbol};
+
+pub const RELEASE_TOPIC: Symbol = symbol_short!("release");
 
 #[contracttype]
 #[derive(Clone)]
@@ -13,6 +15,14 @@ pub enum DataKey {
 pub enum ReleaseStatus {
     Locked,
     Released,
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct ReleaseEvent {
+    pub vault_id: u64,
+    pub beneficiary: Address,
+    pub amount: i128,
 }
 
 #[contracttype]

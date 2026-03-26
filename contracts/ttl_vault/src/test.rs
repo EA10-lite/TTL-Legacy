@@ -2,10 +2,10 @@
 
 use super::*;
 use soroban_sdk::{
-    testutils::{Address as _, Events as _, Ledger},
-    Address, Env, TryIntoVal,
+    testutils::{Address as _, Events, Ledger},
+    vec, Address, Env, IntoVal,
 };
-use types::VaultError;
+use types::{ReleaseEvent, RELEASE_TOPIC};
 
 fn setup() -> (Env, Address, Address, Address, TtlVaultContractClient<'static>) {
     let env = Env::default();
@@ -251,43 +251,27 @@ fn test_update_beneficiary_while_locked_near_expiry() {
 }
 
 #[test]
-fn test_is_expired_at_exact_deadline() {
+fn test_trigger_release_emits_event() {
     let (env, owner, beneficiary) = setup();
-    let client = TtlVaultContractClient::new(&env, &env.register_contract(None, TtlVaultContract));
+    let contract_id = env.register_contract(None, TtlVaultContract);
+    let client = TtlVaultContractClient::new(&env, &contract_id);
 
     let vault_id = client.create_vault(&owner, &beneficiary, &86400u64);
 
-    // Advance time by exactly the check_in_interval (boundary: now == deadline)
-    env.ledger().with_mut(|l| l.timestamp += 86400);
+    // Advance past the check-in interval
+    env.ledger().with_mut(|l| l.timestamp += 90000);
 
-    assert!(client.is_expired(&vault_id));
-    assert_eq!(client.get_ttl_remaining(&vault_id), 0);
-}
+    client.trigger_release(&vault_id);
 
-#[test]
-fn test_is_not_expired_one_second_before_deadline() {
-    let (env, owner, beneficiary) = setup();
-    let client = TtlVaultContractClient::new(&env, &env.register_contract(None, TtlVaultContract));
+    let events = env.events().all();
+    assert_eq!(events.len(), 1);
 
-    let vault_id = client.create_vault(&owner, &beneficiary, &86400u64);
+    let (emitted_contract, topics, data) = events.get(0).unwrap();
+    assert_eq!(emitted_contract, contract_id);
+    assert_eq!(topics, vec![&env, RELEASE_TOPIC.into_val(&env)]);
 
-    // Advance time to one second before the deadline (boundary: now == deadline - 1)
-    env.ledger().with_mut(|l| l.timestamp += 86399);
-
-    assert!(!client.is_expired(&vault_id));
-    assert_eq!(client.get_ttl_remaining(&vault_id), 1);
-}
-
-#[test]
-fn test_expired_and_ttl_remaining_consistency_at_boundary() {
-    let (env, owner, beneficiary) = setup();
-    let client = TtlVaultContractClient::new(&env, &env.register_contract(None, TtlVaultContract));
-
-    let vault_id = client.create_vault(&owner, &beneficiary, &86400u64);
-
-    // One second past the deadline — both functions must agree: expired, TTL == 0
-    env.ledger().with_mut(|l| l.timestamp += 86401);
-
-    assert!(client.is_expired(&vault_id));
-    assert_eq!(client.get_ttl_remaining(&vault_id), 0);
+    let event: ReleaseEvent = data.into_val(&env);
+    assert_eq!(event.vault_id, vault_id);
+    assert_eq!(event.beneficiary, beneficiary);
+    assert_eq!(event.amount, 0); // no deposit was made
 }

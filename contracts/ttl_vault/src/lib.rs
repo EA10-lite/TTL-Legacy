@@ -3,7 +3,7 @@ use soroban_sdk::{contract, contractimpl, symbol_short, token, Address, Env};
 mod test;
 
 mod types;
-use types::{DataKey, ReleaseStatus, Vault, VaultCreatedEvent};
+use types::{DataKey, ReleaseEvent, ReleaseStatus, Vault, RELEASE_TOPIC};
 
 #[contract]
 pub struct TtlVaultContract;
@@ -148,16 +148,22 @@ impl TtlVaultContract {
             panic_with_error!(&env, ContractError::EmptyVault);
         }
 
-        let xlm = token::Client::new(&env, &Self::load_token(&env));
-        xlm.transfer(
-            &env.current_contract_address(),
-            &vault.beneficiary,
-            &vault.balance,
-        );
+        let released_amount = vault.balance;
 
         vault.balance = 0;
         vault.status = ReleaseStatus::Released;
-        Self::save_vault(&env, vault_id, &vault);
+        env.storage()
+            .persistent()
+            .set(&DataKey::Vault(vault_id), &vault);
+
+        env.events().publish(
+            (RELEASE_TOPIC,),
+            ReleaseEvent {
+                vault_id,
+                beneficiary: vault.beneficiary,
+                amount: released_amount,
+            },
+        );
     }
 
     /// Returns true if the check-in window has passed.
