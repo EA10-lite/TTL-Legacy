@@ -3,17 +3,7 @@ use soroban_sdk::{contract, contractimpl, token, Address, Env};
 mod test;
 
 mod types;
-use types::{ContractError, DataKey, ReleaseStatus, Vault};
-use types::{DataKey, ReleaseStatus, Vault, VaultError};
-
-/// ~5 years in ledgers (1 ledger ≈ 5 s). Vaults are long-lived by design.
-const VAULT_TTL_LEDGERS: u32 = 31_536_000;
-/// Extend vault persistent entry when less than ~30 days remain.
-const VAULT_TTL_THRESHOLD: u32 = 518_400;
-/// ~1 year in ledgers for instance storage.
-const INSTANCE_TTL_LEDGERS: u32 = 6_307_200;
-/// Extend instance storage when less than ~30 days remain.
-const INSTANCE_TTL_THRESHOLD: u32 = 518_400;
+use types::{DataKey, ReleaseStatus, Vault, VaultCreatedEvent};
 
 #[contract]
 pub struct TtlVaultContract;
@@ -51,8 +41,8 @@ impl TtlVaultContract {
             + 1;
 
         let vault = Vault {
-            owner,
-            beneficiary,
+            owner: owner.clone(),
+            beneficiary: beneficiary.clone(),
             balance: 0,
             check_in_interval,
             last_check_in: env.ledger().timestamp(),
@@ -66,6 +56,10 @@ impl TtlVaultContract {
         env.storage()
             .instance()
             .extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
+
+        // Emit vault creation event
+        let event = VaultCreatedEvent::new(vault_id, owner, beneficiary, check_in_interval);
+        env.events().publish((event.topic(),), event.to_tuple());
 
         vault_id
     }
