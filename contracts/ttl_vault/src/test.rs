@@ -239,7 +239,6 @@ fn test_cancel_vault_refunds_owner_and_marks_cancelled() {
     assert_eq!(client.get_release_status(&vault_id), ReleaseStatus::Cancelled);
 }
 
- feat/ttl-vault-admin-transfer
 #[test]
 fn test_admin_transfer_full_flow() {
     let (env, _, _, admin, _, client) = setup();
@@ -300,6 +299,7 @@ fn test_propose_admin_can_be_called_multiple_times() {
     assert_eq!(client.get_pending_admin(), None);
     client.with_source_address(&new_admin_2).pause();
     assert!(client.is_paused());
+}
 
 // ---- Task 1: ping_expiry tests ----
 
@@ -507,7 +507,6 @@ fn test_update_metadata_can_be_overwritten() {
         client.get_vault(&vault_id).metadata,
         soroban_sdk::String::from_str(&env, "v2")
     );
- main
 }
 
 #[test]

@@ -103,6 +103,7 @@ stellar keys generate deployer --network testnet
 - [TTL & State Archival Logic](docs/ttl-logic.md)
 - [Passkey Integration](docs/passkeys.md)
 - [Threat Model & Security](docs/security.md)
+- [Security Policy & Vulnerability Disclosure](SECURITY.md)
 - [Roadmap](docs/roadmap.md)
 
 ## 🎓 Smart Contract API
