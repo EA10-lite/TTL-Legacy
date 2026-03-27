@@ -33,6 +33,8 @@ pub enum ContractError {
     InsufficientBalance = 8,
     NotAdmin = 9,
     Paused = 10,
+    InvalidBeneficiary = 11,
+feat/ttl-vault-admin-transfer
     NoPendingAdmin = 11,
     InvalidBps = 12,
     NotExpiringSoon = 13,
@@ -123,7 +125,11 @@ impl TtlVaultContract {
         if check_in_interval == 0 {
             panic_with_error!(&env, ContractError::InvalidInterval);
         }
-        Self::assert_interval_in_bounds(&env, check_in_interval);
+
+        if owner == beneficiary {
+            panic_with_error!(&env, ContractError::InvalidBeneficiary);
+        }
+
         let vault_id = Self::vault_count(env.clone()) + 1;
         let vault = Vault {
             owner: owner.clone(),
@@ -175,6 +181,12 @@ impl TtlVaultContract {
         if vault.status != ReleaseStatus::Locked {
             panic_with_error!(&env, ContractError::AlreadyReleased);
         }
+
+        let now = env.ledger().timestamp();
+        if now >= vault.last_check_in + vault.check_in_interval {
+            panic_with_error!(&env, ContractError::AlreadyReleased);
+        }
+
         let xlm = token::Client::new(&env, &Self::load_token(&env));
         xlm.transfer(&from, &env.current_contract_address(), &amount);
         vault.balance += amount;
@@ -413,6 +425,11 @@ impl TtlVaultContract {
         if vault.status != ReleaseStatus::Locked {
             panic_with_error!(&env, ContractError::AlreadyReleased);
         }
+
+        if vault.owner == new_beneficiary {
+            panic_with_error!(&env, ContractError::InvalidBeneficiary);
+        }
+
         vault.beneficiary = new_beneficiary;
         Self::save_vault(&env, vault_id, &vault);
     }

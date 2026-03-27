@@ -184,6 +184,10 @@ fn test_paused_blocks_check_in_withdraw_and_trigger_release() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #11)")]
+fn test_create_vault_rejects_owner_as_beneficiary() {
+    let (_, owner, _, _, _, client) = setup();
+    client.create_vault(&owner, &owner, &1000);
 fn test_get_vaults_by_owner_tracks_multiple_vaults() {
     let (env, owner, beneficiary, _, _, client) = setup();
 
@@ -262,6 +266,19 @@ fn test_admin_transfer_full_flow() {
 
 #[test]
 #[should_panic(expected = "Error(Contract, #11)")]
+fn test_update_beneficiary_rejects_owner_as_beneficiary() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &1000);
+    client.update_beneficiary(&vault_id, &owner);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_deposit_into_expired_vault_is_rejected() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.deposit(&vault_id, &owner, &500i128);
 fn test_accept_admin_fails_when_no_pending_admin() {
     let (env, _, _, _, _, client) = setup();
     let new_admin = Address::generate(&env);
