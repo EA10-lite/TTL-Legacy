@@ -523,3 +523,17 @@ fn test_create_vault_zero_interval_fails() {
     let result = client.try_create_vault(&owner, &beneficiary, &0u64);
     assert!(result.is_err());
 }
+
+#[test]
+#[should_panic(expected = "Error(Contract, #7)")]
+fn test_deposit_panics_after_release() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.trigger_release(&vault_id);
+
+    // deposit on a released vault must panic with AlreadyReleased (#7)
+    client.deposit(&vault_id, &owner, &100i128);
+}
