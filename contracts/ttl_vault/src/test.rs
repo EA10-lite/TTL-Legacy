@@ -4,7 +4,7 @@ use super::*;
 use soroban_sdk::{
     testutils::{Address as _, Ledger},
     token::{self, StellarAssetClient},
-    vec, Address, Env,
+    vec, Address, BytesN, Env,
 };
 
 fn setup() -> (
@@ -522,4 +522,125 @@ fn test_create_vault_zero_interval_fails() {
 
     let result = client.try_create_vault(&owner, &beneficiary, &0u64);
     assert!(result.is_err());
+}
+
+// ---- Issue 1: get_vaults_by_beneficiary ----
+
+#[test]
+fn test_get_vaults_by_beneficiary_tracks_vaults() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let other_beneficiary = Address::generate(&env);
+
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary), vec![&env]);
+
+    let vault_id_1 = client.create_vault(&owner, &beneficiary, &100u64);
+    let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
+    let _vault_id_3 = client.create_vault(&owner, &other_beneficiary, &300u64);
+
+    assert_eq!(
+        client.get_vaults_by_beneficiary(&beneficiary),
+        vec![&env, vault_id_1, vault_id_2]
+    );
+    assert_eq!(
+        client.get_vaults_by_beneficiary(&other_beneficiary),
+        vec![&env, _vault_id_3]
+    );
+}
+
+#[test]
+fn test_get_vaults_by_beneficiary_empty_for_unknown() {
+    let (env, _, _, _, _, client) = setup();
+    let stranger = Address::generate(&env);
+    assert_eq!(client.get_vaults_by_beneficiary(&stranger), vec![&env]);
+}
+
+// ---- Issue 2: upgrade ----
+
+#[test]
+#[should_panic]
+fn test_upgrade_fails_for_non_admin() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let _vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    // Use a zero hash — this will fail auth before even reaching deployer
+    let fake_hash = BytesN::from_array(&env, &[0u8; 32]);
+    // Call upgrade as owner (not admin) — should panic with NotAdmin
+    client.with_source_address(&owner).upgrade(&fake_hash);
+}
+
+// ---- Issue 3: max_check_in_interval ----
+
+#[test]
+fn test_set_and_get_max_check_in_interval() {
+    let (_, _, _, _, _, client) = setup();
+    assert_eq!(client.get_max_check_in_interval(), None);
+    client.set_max_check_in_interval(&86_400u64);
+    assert_eq!(client.get_max_check_in_interval(), Some(86_400u64));
+}
+
+#[test]
+fn test_create_vault_fails_when_interval_exceeds_max() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_max_check_in_interval(&1_000u64);
+    assert!(client.try_create_vault(&owner, &beneficiary, &2_000u64).is_err());
+}
+
+#[test]
+fn test_create_vault_succeeds_at_max_boundary() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_max_check_in_interval(&1_000u64);
+    let vault_id = client.create_vault(&owner, &beneficiary, &1_000u64);
+    assert_eq!(client.get_vault(&vault_id).check_in_interval, 1_000u64);
+}
+
+#[test]
+fn test_update_check_in_interval_fails_when_exceeds_max() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.set_max_check_in_interval(&500u64);
+    assert!(client.try_update_check_in_interval(&vault_id, &600u64).is_err());
+}
+
+// ---- Issue 4: min_check_in_interval ----
+
+#[test]
+fn test_set_and_get_min_check_in_interval() {
+    let (_, _, _, _, _, client) = setup();
+    assert_eq!(client.get_min_check_in_interval(), None);
+    client.set_min_check_in_interval(&60u64);
+    assert_eq!(client.get_min_check_in_interval(), Some(60u64));
+}
+
+#[test]
+fn test_create_vault_fails_when_interval_below_min() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_min_check_in_interval(&3_600u64);
+    assert!(client.try_create_vault(&owner, &beneficiary, &100u64).is_err());
+}
+
+#[test]
+fn test_create_vault_succeeds_at_min_boundary() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_min_check_in_interval(&3_600u64);
+    let vault_id = client.create_vault(&owner, &beneficiary, &3_600u64);
+    assert_eq!(client.get_vault(&vault_id).check_in_interval, 3_600u64);
+}
+
+#[test]
+fn test_update_check_in_interval_fails_when_below_min() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_min_check_in_interval(&3_600u64);
+    let vault_id = client.create_vault(&owner, &beneficiary, &3_600u64);
+    assert!(client.try_update_check_in_interval(&vault_id, &100u64).is_err());
+}
+
+#[test]
+fn test_min_and_max_both_enforced() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    client.set_min_check_in_interval(&60u64);
+    client.set_max_check_in_interval(&3_600u64);
+
+    assert!(client.try_create_vault(&owner, &beneficiary, &30u64).is_err());
+    assert!(client.try_create_vault(&owner, &beneficiary, &7_200u64).is_err());
+    let vault_id = client.create_vault(&owner, &beneficiary, &1_800u64);
+    assert_eq!(client.get_vault(&vault_id).check_in_interval, 1_800u64);
 }
