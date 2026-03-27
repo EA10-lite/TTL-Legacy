@@ -389,3 +389,11 @@ fn test_get_contract_token_returns_correct_address() {
     let (_, _, _, _, token_address, client) = setup();
     assert_eq!(client.get_contract_token(), token_address);
 }
+
+#[test]
+fn test_create_vault_zero_interval_fails() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+
+    let result = client.try_create_vault(&owner, &beneficiary, &0u64);
+    assert!(result.is_err());
+}
