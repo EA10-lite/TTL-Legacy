@@ -99,6 +99,13 @@ fn test_pause_and_unpause_toggle() {
 }
 
 #[test]
+fn test_get_admin_view() {
+    let (_, _, _, admin, _, client) = setup();
+
+    assert_eq!(client.get_admin(), admin);
+}
+
+#[test]
 fn test_paused_blocks_check_in_withdraw_and_trigger_release() {
     let (env, owner, beneficiary, _, _, client) = setup();
 

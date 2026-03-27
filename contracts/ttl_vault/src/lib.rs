@@ -76,33 +76,10 @@ impl TtlVaultContract {
     }
 
     pub fn get_admin(env: Env) -> Address {
-        Self::load_admin(&env)
-    }
-
-    pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().instance().get(&DataKey::PendingAdmin)
-    }
-
-    /// Propose a new admin. Only the current admin can call this.
-    /// The proposed admin must accept to complete the transfer.
-    pub fn propose_admin(env: Env, new_admin: Address) {
-        Self::require_admin(&env);
-        env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
-    }
-
-    /// Accept the admin role. Only the proposed admin can call this.
-    /// Completes the two-step admin transfer.
-    pub fn accept_admin(env: Env) {
-        let pending_admin: Address = env
-            .storage()
+        env.storage()
             .instance()
-            .get(&DataKey::PendingAdmin)
-            .unwrap_or_else(|| panic_with_error!(&env, ContractError::NoPendingAdmin));
-
-        pending_admin.require_auth();
-
-        env.storage().instance().set(&DataKey::Admin, &pending_admin);
-        env.storage().instance().remove(&DataKey::PendingAdmin);
+            .get(&DataKey::Admin)
+            .expect("not initialized")
     }
 
     // --- vault lifecycle ---
