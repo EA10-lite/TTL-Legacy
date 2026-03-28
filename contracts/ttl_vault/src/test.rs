@@ -206,3 +206,49 @@ fn test_deposit_into_expired_vault_is_rejected() {
     env.ledger().with_mut(|l| l.timestamp += 200);
     client.deposit(&vault_id, &owner, &500i128);
 }
+
+#[test]
+fn test_deposit_emits_event() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    env.mock_all_auths();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    client.deposit(&vault_id, &owner, &300i128);
+
+    let events = env.events().all();
+    // find the deposit event: topic[0] == "deposit", topic[1] == vault_id
+    let deposit_event = events.iter().find(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
+        if topics.len() < 2 {
+            return false;
+        }
+        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        topic0.map(|s| s == soroban_sdk::symbol_short!("deposit")).unwrap_or(false)
+    });
+
+    assert!(deposit_event.is_some(), "deposit event not emitted");
+}
+
+#[test]
+fn test_withdraw_emits_event() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    env.mock_all_auths();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+
+    client.withdraw(&vault_id, &100i128);
+
+    let events = env.events().all();
+    let withdraw_event = events.iter().find(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
+        if topics.len() < 2 {
+            return false;
+        }
+        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        topic0.map(|s| s == soroban_sdk::symbol_short!("withdraw")).unwrap_or(false)
+    });
+
+    assert!(withdraw_event.is_some(), "withdraw event not emitted");
+}

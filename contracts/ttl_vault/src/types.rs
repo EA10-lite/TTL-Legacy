@@ -3,6 +3,8 @@ use soroban_sdk::{contracttype, symbol_short, Address, String, Symbol, Vec};
 pub const RELEASE_TOPIC: Symbol = symbol_short!("release");
 pub const VAULT_CREATED_TOPIC: Symbol = symbol_short!("v_created");
 pub const PING_EXPIRY_TOPIC: Symbol = symbol_short!("ping_exp");
+pub const DEPOSIT_TOPIC: Symbol = symbol_short!("deposit");
+pub const WITHDRAW_TOPIC: Symbol = symbol_short!("withdraw");
 
 /// Warning threshold in seconds. If TTL remaining < this value, ping_expiry emits an event.
 pub const EXPIRY_WARNING_THRESHOLD: u64 = 86_400; // 24 hours

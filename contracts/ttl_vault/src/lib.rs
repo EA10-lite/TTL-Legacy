@@ -8,7 +8,7 @@ use soroban_sdk::{
 mod types;
 use types::{
     BeneficiaryEntry, DataKey, ReleaseEvent, ReleaseStatus, Vault, EXPIRY_WARNING_THRESHOLD,
-    PING_EXPIRY_TOPIC, RELEASE_TOPIC, VAULT_CREATED_TOPIC,
+    DEPOSIT_TOPIC, WITHDRAW_TOPIC, PING_EXPIRY_TOPIC, RELEASE_TOPIC, VAULT_CREATED_TOPIC,
 };
 
 #[cfg(test)]
@@ -187,6 +187,10 @@ impl TtlVaultContract {
         xlm.transfer(&from, &env.current_contract_address(), &amount);
         vault.balance += amount;
         Self::save_vault(&env, vault_id, &vault);
+        env.events().publish(
+            (DEPOSIT_TOPIC, vault_id),
+            (amount, vault.balance),
+        );
     }
 
  feat/batch-deposit
@@ -250,6 +254,10 @@ impl TtlVaultContract {
         xlm.transfer(&env.current_contract_address(), &vault.owner, &amount);
         vault.balance -= amount;
         Self::save_vault(&env, vault_id, &vault);
+        env.events().publish(
+            (WITHDRAW_TOPIC, vault_id),
+            (amount, vault.balance),
+        );
         Ok(())
     }
 
