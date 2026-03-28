@@ -33,6 +33,12 @@ pub enum ContractError {
     InsufficientBalance = 8,
     NotAdmin = 9,
     Paused = 10,
+    NoPendingAdmin = 11,
+    InvalidBps = 12,
+    NotExpiringSoon = 13,
+    IntervalTooLow = 14,
+    IntervalTooHigh = 15,
+    NotExpired = 16,
     InvalidBeneficiary = 11,
 }
 
@@ -43,6 +49,18 @@ pub struct TtlVaultContract;
 impl TtlVaultContract {
     // --- admin/config ---
 
+    /// Initializes the contract with the XLM token address and admin address.
+    ///
+    /// This function must be called once before any other contract operations.
+    /// It sets up the initial configuration and stores the admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `xlm_token` - The address of the XLM token contract
+    /// * `admin` - The address of the contract administrator
+    ///
+    /// # Panics
+    /// Panics if the contract has already been initialized
     pub fn initialize(env: Env, xlm_token: Address, admin: Address) {
         if env.storage().instance().has(&DataKey::TokenAddress)
             || env.storage().instance().has(&DataKey::Admin)
@@ -56,16 +74,46 @@ impl TtlVaultContract {
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
     }
 
+    /// Pauses the contract, blocking all state-changing operations.
+    ///
+    /// Only the admin can call this function. When paused, operations like
+    /// deposit, withdraw, check_in, and trigger_release will fail.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Panics
+    /// Panics if the caller is not the admin
     pub fn pause(env: Env) {
         Self::require_admin(&env);
         env.storage().instance().set(&DataKey::Paused, &true);
     }
 
+    /// Unpauses the contract, allowing all operations to resume.
+    ///
+    /// Only the admin can call this function.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Panics
+    /// Panics if the caller is not the admin
     pub fn unpause(env: Env) {
         Self::require_admin(&env);
         env.storage().instance().set(&DataKey::Paused, &false);
     }
 
+    /// Sets the minimum allowed check-in interval for vaults.
+    ///
+    /// This constraint applies to both new vaults and interval updates.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `min_interval` - Minimum interval in seconds (must be > 0)
+    ///
+    /// # Panics
+    /// * Panics if the caller is not the admin
+    /// * Panics if `min_interval` is 0
     pub fn set_min_check_in_interval(env: Env, min_interval: u64) {
         Self::require_admin(&env);
         if min_interval == 0 {
@@ -74,6 +122,17 @@ impl TtlVaultContract {
         env.storage().instance().set(&DataKey::MinCheckInInterval, &min_interval);
     }
 
+    /// Sets the maximum allowed check-in interval for vaults.
+    ///
+    /// This constraint applies to both new vaults and interval updates.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `max_interval` - Maximum interval in seconds (must be > 0)
+    ///
+    /// # Panics
+    /// * Panics if the caller is not the admin
+    /// * Panics if `max_interval` is 0
     pub fn set_max_check_in_interval(env: Env, max_interval: u64) {
         Self::require_admin(&env);
         if max_interval == 0 {
@@ -82,10 +141,24 @@ impl TtlVaultContract {
         env.storage().instance().set(&DataKey::MaxCheckInInterval, &max_interval);
     }
 
+    /// Returns the minimum check-in interval if set.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `Some(seconds)` with the minimum interval, or `None` if not set
     pub fn get_min_check_in_interval(env: Env) -> Option<u64> {
         env.storage().instance().get(&DataKey::MinCheckInInterval)
     }
 
+    /// Returns the maximum check-in interval if set.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `Some(seconds)` with the maximum interval, or `None` if not set
     pub fn get_max_check_in_interval(env: Env) -> Option<u64> {
         env.storage().instance().get(&DataKey::MaxCheckInInterval)
     }
@@ -96,19 +169,53 @@ impl TtlVaultContract {
         env.deployer().update_current_contract_wasm(new_wasm_hash);
     }
 
+    /// Returns whether the contract is currently paused.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// `true` if the contract is paused, `false` otherwise
     pub fn is_paused(env: Env) -> bool {
         Self::load_paused(&env)
     }
 
+    /// Returns the current admin address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// The admin address
+    ///
+    /// # Panics
+    /// Panics if the contract is not initialized
     pub fn get_admin(env: Env) -> Address {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("not initialized")
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::VaultNotFound))
     }
 
     // --- vault lifecycle ---
 
+    /// Creates a new time-locked vault.
+    ///
+    /// The vault starts with a zero balance and must be funded via `deposit`
+    /// or `batch_deposit` before it can hold assets.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `owner` - The address of the vault owner (must authorize)
+    /// * `beneficiary` - The address that will receive funds when the vault expires
+    /// * `check_in_interval` - Time interval in seconds between required check-ins
+    ///
+    /// # Returns
+    /// The unique vault ID
+    ///
+    /// # Panics
+    /// * Panics if `check_in_interval` is 0
+    /// * Panics if `check_in_interval` is outside the configured min/max bounds
     pub fn create_vault(
         env: Env,
         owner: Address,
@@ -149,6 +256,23 @@ impl TtlVaultContract {
         vault_id
     }
 
+    /// Records a check-in to reset the vault's expiry timer.
+    ///
+    /// The caller must be the vault owner. This function resets the `last_check_in`
+    /// timestamp, extending the vault's TTL.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `caller` - The address of the caller (must be the vault owner)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
     pub fn check_in(env: Env, vault_id: u64, caller: Address) -> Result<(), ContractError> {
         if Self::load_paused(&env) {
             return Err(ContractError::Paused);
@@ -167,6 +291,21 @@ impl TtlVaultContract {
         Ok(())
     }
 
+    /// Deposits funds into a vault.
+    ///
+    /// Transfers tokens from the caller to the contract and increases the vault's balance.
+    /// The vault must be in Locked status.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `from` - The address depositing funds (must authorize)
+    /// * `amount` - Amount to deposit in stroops (1 XLM = 10,000,000 stroops)
+    ///
+    /// # Panics
+    /// * Panics if the contract is paused
+    /// * Panics if `amount` is not positive
+    /// * Panics if the vault is not in Locked status
     pub fn deposit(env: Env, vault_id: u64, from: Address, amount: i128) {
         Self::assert_not_paused(&env);
         if amount <= 0 {
@@ -189,8 +328,21 @@ impl TtlVaultContract {
         Self::save_vault(&env, vault_id, &vault);
     }
 
- feat/batch-deposit
-    /// Deposit into multiple vaults in a single transfer from the same address.
+    /// Deposits funds into multiple vaults in a single transfer.
+    ///
+    /// This is more efficient than calling `deposit` multiple times as it only
+    /// requires one token transfer. All vaults must be in Locked status.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `from` - The address depositing funds (must authorize)
+    /// * `deposit` - Vector of (vault_id, amount) pairs where amount is in stroops (1 XLM = 10,000,000 stroops)
+    ///
+    /// # Panics
+    /// * Panics if the contract is paused
+    /// * Panics if any amount is not positive
+    /// * Panics if any vault is not in Locked status
+    /// * Panics if the total amount overflows
     pub fn batch_deposit(env: Env, from: Address, deposits: Vec<(u64, i128)>) {
         Self::assert_not_paused(&env);
         from.require_auth();
@@ -230,7 +382,21 @@ impl TtlVaultContract {
     }
 
     /// Owner withdraws from the vault.
- main
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `amount` - Amount to withdraw in stroops (1 XLM = 10,000,000 stroops)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::InvalidAmount` - If amount is not positive
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
+    /// * `ContractError::InsufficientBalance` - If vault balance is less than amount
     pub fn withdraw(env: Env, vault_id: u64, amount: i128) -> Result<(), ContractError> {
         if Self::load_paused(&env) {
             return Err(ContractError::Paused);
@@ -253,7 +419,21 @@ impl TtlVaultContract {
         Ok(())
     }
 
-    /// Anyone can call once TTL has lapsed. Splits funds to beneficiaries.
+    /// Triggers the release of funds to beneficiaries after the vault expires.
+    ///
+    /// Anyone can call this function once the vault's TTL has lapsed. The funds
+    /// are distributed to the primary beneficiary or split among multiple beneficiaries
+    /// based on their BPS allocations.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Panics
+    /// * Panics if the contract is paused
+    /// * Panics if the vault is not in Locked status
+    /// * Panics if the vault has not expired yet
+    /// * Panics if the vault balance is zero
     pub fn trigger_release(env: Env, vault_id: u64) {
         Self::assert_not_paused(&env);
         let mut vault = Self::load_vault(&env, vault_id);
@@ -261,7 +441,7 @@ impl TtlVaultContract {
             panic_with_error!(&env, ContractError::AlreadyReleased);
         }
         if !Self::is_expired(env.clone(), vault_id) {
-            panic!("vault not yet expired");
+            panic_with_error!(&env, ContractError::NotExpired);
         }
         if vault.balance == 0 {
             panic_with_error!(&env, ContractError::EmptyVault);
@@ -300,7 +480,18 @@ impl TtlVaultContract {
 
     // --- Task 1: ping_expiry ---
 
-    /// Callable by anyone. Emits a warning event if TTL remaining < EXPIRY_WARNING_THRESHOLD.
+    /// Checks the remaining TTL and emits a warning event if near expiry.
+    ///
+    /// This function can be called by anyone to monitor vault expiry status.
+    /// If the remaining TTL is less than `EXPIRY_WARNING_THRESHOLD` (24 hours),
+    /// a warning event is emitted.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// The remaining TTL in seconds (0 if expired)
     pub fn ping_expiry(env: Env, vault_id: u64) -> u64 {
         let ttl = Self::get_ttl_remaining(env.clone(), vault_id).unwrap_or(0);
         if ttl < EXPIRY_WARNING_THRESHOLD {
@@ -311,7 +502,25 @@ impl TtlVaultContract {
 
     // --- Task 2: partial_release ---
 
-    /// Owner-only. Transfers `amount` to the beneficiary without changing vault status.
+    /// Transfers a partial amount to the beneficiary without releasing the vault.
+    ///
+    /// This allows the owner to distribute funds gradually while keeping the vault
+    /// in Locked status. The vault can still be checked in and released later.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `amount` - Amount to transfer in stroops (1 XLM = 10,000,000 stroops)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::InvalidAmount` - If amount is not positive
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
+    /// * `ContractError::InsufficientBalance` - If vault balance is less than amount
     pub fn partial_release(env: Env, vault_id: u64, amount: i128) -> Result<(), ContractError> {
         Self::assert_not_paused(&env);
         if amount <= 0 {
@@ -338,7 +547,23 @@ impl TtlVaultContract {
 
     // --- Task 3: set_beneficiaries ---
 
-    /// Owner-only. Set multiple beneficiaries with BPS allocations summing to 10_000.
+    /// Sets multiple beneficiaries with basis point (BPS) allocations.
+    ///
+    /// The sum of all BPS values must equal 10,000 (100%). When the vault is
+    /// released, funds are split according to these allocations.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `beneficiaries` - Vector of BeneficiaryEntry structs with addresses and BPS values
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
+    /// * `ContractError::InvalidBps` - If BPS sum is not 10,000
     pub fn set_beneficiaries(
         env: Env,
         vault_id: u64,
@@ -360,7 +585,21 @@ impl TtlVaultContract {
 
     // --- Task 4: update_metadata ---
 
-    /// Owner-only. Attach or update a short metadata string on the vault.
+    /// Updates the metadata string associated with a vault.
+    ///
+    /// This can be used to store a label, IPFS hash, or other reference data.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `metadata` - The metadata string to attach
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
     pub fn update_metadata(env: Env, vault_id: u64, metadata: String) -> Result<(), ContractError> {
         let mut vault = Self::load_vault(&env, vault_id);
         vault.owner.require_auth();
@@ -374,47 +613,147 @@ impl TtlVaultContract {
 
     // --- views ---
 
+    /// Checks if a vault has expired based on the check-in interval.
+    ///
+    /// A vault is considered expired when the current timestamp is greater than
+    /// or equal to the deadline (last_check_in + check_in_interval).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// `true` if the vault has expired, `false` otherwise
+    ///
+    /// # Panics
+    /// Panics if the vault does not exist
     pub fn is_expired(env: Env, vault_id: u64) -> bool {
         let vault = Self::load_vault(&env, vault_id);
         let now = env.ledger().timestamp();
         now >= vault.last_check_in + vault.check_in_interval
     }
 
+    /// Retrieves a vault by its unique identifier.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// The `Vault` struct containing all vault data
+    ///
+    /// # Panics
+    /// Panics if the vault does not exist (use `vault_exists` to check first)
     pub fn get_vault(env: Env, vault_id: u64) -> Vault {
         Self::load_vault(&env, vault_id)
     }
 
+    /// Checks if a vault exists.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// `true` if the vault exists, `false` otherwise
     pub fn vault_exists(env: Env, vault_id: u64) -> bool {
-        env.storage().persistent().has(&DataKey::Vault(vault_id))
+        Self::try_load_vault(&env, vault_id).is_some()
     }
 
+    /// Returns all vault IDs owned by a specific address.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `owner` - The owner address
+    ///
+    /// # Returns
+    /// A vector of vault IDs
     pub fn get_vaults_by_owner(env: Env, owner: Address) -> Vec<u64> {
         Self::load_owner_vault_ids(&env, &owner)
     }
 
+    /// Returns all vault IDs where a specific address is the beneficiary.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `beneficiary` - The beneficiary address
+    ///
+    /// # Returns
+    /// A vector of vault IDs
     pub fn get_vaults_by_beneficiary(env: Env, beneficiary: Address) -> Vec<u64> {
         Self::load_beneficiary_vault_ids(&env, &beneficiary)
     }
 
+    /// Returns the remaining time-to-live (TTL) for a vault in seconds.
+    ///
+    /// The TTL is calculated as the time remaining until the vault expires
+    /// based on the last check-in time and the check-in interval.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// `Some(seconds)` with the remaining time in seconds, or `None` if the vault doesn't exist.
+    /// Returns `Some(0)` if the vault has already expired.
     pub fn get_ttl_remaining(env: Env, vault_id: u64) -> Option<u64> {
-        let vault: Vault = env.storage().persistent().get(&DataKey::Vault(vault_id))?;
+        let vault = Self::try_load_vault(&env, vault_id)?;
         let deadline = vault.last_check_in + vault.check_in_interval;
         let now = env.ledger().timestamp();
         if now >= deadline { Some(0) } else { Some(deadline - now) }
     }
 
+    /// Returns the current release status of a vault.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// The `ReleaseStatus` enum value (Locked, Released, or Cancelled)
+    ///
+    /// # Panics
+    /// Panics if the vault does not exist
     pub fn get_release_status(env: Env, vault_id: u64) -> ReleaseStatus {
         Self::load_vault(&env, vault_id).status
     }
 
+    /// Returns the total number of vaults created.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// The total vault count
     pub fn vault_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::VaultCount).unwrap_or(0u64)
     }
 
+    /// Returns the address of the XLM token used by this contract.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    ///
+    /// # Returns
+    /// The token contract address
     pub fn get_contract_token(env: Env) -> Address {
         Self::load_token(&env)
     }
 
+    /// Updates the primary beneficiary of a vault.
+    ///
+    /// This function allows the vault owner to change the beneficiary who will
+    /// receive the funds when the vault expires. The vault must still be in
+    /// Locked status (not yet released).
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `new_beneficiary` - The new beneficiary address
+    ///
+    /// # Panics
+    /// * Panics if the caller is not the vault owner
+    /// * Panics if the vault is not in Locked status (already released or cancelled)
     pub fn update_beneficiary(env: Env, vault_id: u64, new_beneficiary: Address) {
         let mut vault = Self::load_vault(&env, vault_id);
         vault.owner.require_auth();
@@ -430,6 +769,25 @@ impl TtlVaultContract {
         Self::save_vault(&env, vault_id, &vault);
     }
 
+    /// Updates the check-in interval for a vault.
+    ///
+    /// The new interval must be within the configured min/max bounds.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `new_interval` - New interval in seconds (must be > 0)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::InvalidInterval` - If new_interval is 0
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
+    /// * `ContractError::IntervalTooLow` - If new_interval is below minimum
+    /// * `ContractError::IntervalTooHigh` - If new_interval exceeds maximum
     pub fn update_check_in_interval(
         env: Env,
         vault_id: u64,
@@ -452,6 +810,22 @@ impl TtlVaultContract {
         Ok(())
     }
 
+    /// Cancels a vault and refunds the balance to the owner.
+    ///
+    /// This permanently marks the vault as Cancelled and transfers any
+    /// remaining balance back to the owner.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::NotOwner` - If caller is not the vault owner
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
     pub fn cancel_vault(env: Env, vault_id: u64) -> Result<(), ContractError> {
         if Self::load_paused(&env) {
             return Err(ContractError::Paused);
@@ -472,6 +846,22 @@ impl TtlVaultContract {
         Ok(())
     }
 
+    /// Transfers ownership of a vault to a new address.
+    ///
+    /// Both the current owner and new owner must authorize this operation.
+    /// The vault must still be in Locked status.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    /// * `new_owner` - The address of the new owner (must authorize)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, `Err` on failure
+    ///
+    /// # Errors
+    /// * `ContractError::Paused` - If the contract is paused
+    /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
     pub fn transfer_ownership(
         env: Env,
         vault_id: u64,
@@ -517,11 +907,11 @@ impl TtlVaultContract {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .expect("not initialized")
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::VaultNotFound))
     }
 
     fn load_token(env: &Env) -> Address {
-        env.storage().instance().get(&DataKey::TokenAddress).expect("not initialized")
+        env.storage().instance().get(&DataKey::TokenAddress).unwrap_or_else(|| panic_with_error!(env, ContractError::VaultNotFound))
     }
 
     fn load_vault(env: &Env, vault_id: u64) -> Vault {
@@ -529,6 +919,23 @@ impl TtlVaultContract {
             .persistent()
             .get(&DataKey::Vault(vault_id))
             .unwrap_or_else(|| panic_with_error!(env, ContractError::VaultNotFound))
+    }
+
+    /// Tries to load a vault, returning None if it doesn't exist.
+    ///
+    /// This is a safe alternative to `load_vault` for use in view functions
+    /// that should not panic when a vault is not found.
+    ///
+    /// # Arguments
+    /// * `env` - The Soroban environment
+    /// * `vault_id` - The unique identifier of the vault
+    ///
+    /// # Returns
+    /// `Some(Vault)` if the vault exists, `None` otherwise
+    fn try_load_vault(env: &Env, vault_id: u64) -> Option<Vault> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::Vault(vault_id))
     }
 
     fn load_owner_vault_ids(env: &Env, owner: &Address) -> Vec<u64> {
