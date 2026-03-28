@@ -507,7 +507,8 @@ impl TtlVaultContract {
     /// # Returns
     /// The remaining TTL in seconds (0 if expired)
     pub fn ping_expiry(env: Env, vault_id: u64) -> u64 {
-        let ttl = Self::get_ttl_remaining(env.clone(), vault_id).unwrap_or(0);
+        let ttl = Self::get_ttl_remaining(env.clone(), vault_id)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::VaultNotFound));
         if ttl < EXPIRY_WARNING_THRESHOLD {
             env.events().publish((PING_EXPIRY_TOPIC, vault_id), ttl);
         }

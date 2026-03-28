@@ -320,6 +320,13 @@ fn test_ping_expiry_returns_zero_when_expired() {
     assert_eq!(ttl, 0u64);
 }
 
+#[test]
+#[should_panic]
+fn test_ping_expiry_panics_for_nonexistent_vault() {
+    let (_, _, _, _, _, client) = setup();
+    client.ping_expiry(&9999u64);
+}
+
 // ---- Task 2: partial_release tests ----
 
 #[test]
