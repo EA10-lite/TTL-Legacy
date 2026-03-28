@@ -263,14 +263,13 @@ impl TtlVaultContract {
         if !Self::is_expired(env.clone(), vault_id) {
             panic!("vault not yet expired");
         }
-        if vault.balance == 0 {
-            panic_with_error!(&env, ContractError::EmptyVault);
-        }
         let total = vault.balance;
         let xlm = token::Client::new(&env, &Self::load_token(&env));
 
         if vault.beneficiaries.is_empty() {
-            xlm.transfer(&env.current_contract_address(), &vault.beneficiary, &total);
+            if total > 0 {
+                xlm.transfer(&env.current_contract_address(), &vault.beneficiary, &total);
+            }
             env.events().publish(
                 (RELEASE_TOPIC,),
                 ReleaseEvent { vault_id, beneficiary: vault.beneficiary.clone(), amount: total },
@@ -284,7 +283,9 @@ impl TtlVaultContract {
                 } else {
                     total * (entry.bps as i128) / 10_000
                 };
-                xlm.transfer(&env.current_contract_address(), &entry.address, &share);
+                if share > 0 {
+                    xlm.transfer(&env.current_contract_address(), &entry.address, &share);
+                }
                 distributed += share;
                 env.events().publish(
                     (RELEASE_TOPIC,),
