@@ -41,6 +41,7 @@ pub enum ContractError {
     NotExpired = 16,
     InvalidBeneficiary = 11,
     BalanceOverflow = 12,
+    VaultExpired = 17,
 }
 
 #[contract]
@@ -320,7 +321,7 @@ impl TtlVaultContract {
 
         let now = env.ledger().timestamp();
         if now >= vault.last_check_in + vault.check_in_interval {
-            panic_with_error!(&env, ContractError::AlreadyReleased);
+            panic_with_error!(&env, ContractError::VaultExpired);
         }
 
         let xlm = token::Client::new(&env, &Self::load_token(&env));
