@@ -605,3 +605,22 @@ fn test_trigger_release_emits_event_with_zero_balance() {
 
     assert!(release_event.is_some(), "release event not emitted for zero-balance vault");
 }
+
+#[test]
+fn test_deposit_rejects_balance_overflow() {
+    let (env, owner, beneficiary, _, token_address, client) = setup();
+
+    // mint enough tokens to attempt the overflow deposit
+    StellarAssetClient::new(&env, &token_address).mint(&owner, &i128::MAX);
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    // first deposit fills balance to i128::MAX
+    client.deposit(&vault_id, &owner, &i128::MAX);
+
+    // mint 1 more token and attempt to push balance past i128::MAX
+    StellarAssetClient::new(&env, &token_address).mint(&owner, &1i128);
+    let result = client.try_deposit(&vault_id, &owner, &1i128);
+
+    assert!(result.is_err(), "expected overflow error on deposit exceeding i128::MAX");
+}
