@@ -8,7 +8,8 @@ use soroban_sdk::{
 mod types;
 use types::{
     BeneficiaryEntry, DataKey, ReleaseEvent, ReleaseStatus, Vault, EXPIRY_WARNING_THRESHOLD,
-    DEPOSIT_TOPIC, WITHDRAW_TOPIC, PING_EXPIRY_TOPIC, RELEASE_TOPIC, VAULT_CREATED_TOPIC,
+    CANCEL_TOPIC, CHECK_IN_TOPIC, DEPOSIT_TOPIC, OWNERSHIP_TOPIC, PING_EXPIRY_TOPIC,
+    RELEASE_TOPIC, VAULT_CREATED_TOPIC, WITHDRAW_TOPIC,
 };
 
 #[cfg(test)]
@@ -304,7 +305,7 @@ impl TtlVaultContract {
         }
         vault.last_check_in = env.ledger().timestamp();
         Self::save_vault(&env, vault_id, &vault);
-        env.events().publish((symbol_short!("check_in"), vault_id), vault.last_check_in);
+        env.events().publish((CHECK_IN_TOPIC, vault_id), vault.last_check_in);
         Ok(())
     }
 
@@ -693,28 +694,34 @@ impl TtlVaultContract {
         Self::try_load_vault(&env, vault_id).is_some()
     }
 
-    /// Returns all vault IDs owned by a specific address.
+    /// Returns a paginated slice of vault IDs owned by a specific address.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
     /// * `owner` - The owner address
+    /// * `page` - Zero-based page index
+    /// * `page_size` - Number of items per page
     ///
     /// # Returns
-    /// A vector of vault IDs
-    pub fn get_vaults_by_owner(env: Env, owner: Address) -> Vec<u64> {
-        Self::load_owner_vault_ids(&env, &owner)
+    /// A vector of vault IDs for the requested page
+    pub fn get_vaults_by_owner(env: Env, owner: Address, page: u32, page_size: u32) -> Vec<u64> {
+        let all = Self::load_owner_vault_ids(&env, &owner);
+        Self::paginate(&env, all, page, page_size)
     }
 
-    /// Returns all vault IDs where a specific address is the beneficiary.
+    /// Returns a paginated slice of vault IDs where a specific address is the beneficiary.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
     /// * `beneficiary` - The beneficiary address
+    /// * `page` - Zero-based page index
+    /// * `page_size` - Number of items per page
     ///
     /// # Returns
-    /// A vector of vault IDs
-    pub fn get_vaults_by_beneficiary(env: Env, beneficiary: Address) -> Vec<u64> {
-        Self::load_beneficiary_vault_ids(&env, &beneficiary)
+    /// A vector of vault IDs for the requested page
+    pub fn get_vaults_by_beneficiary(env: Env, beneficiary: Address, page: u32, page_size: u32) -> Vec<u64> {
+        let all = Self::load_beneficiary_vault_ids(&env, &beneficiary);
+        Self::paginate(&env, all, page, page_size)
     }
 
     /// Returns the remaining time-to-live (TTL) for a vault in seconds.
@@ -876,6 +883,7 @@ impl TtlVaultContract {
         vault.balance = 0;
         vault.status = ReleaseStatus::Cancelled;
         Self::save_vault(&env, vault_id, &vault);
+        env.events().publish((CANCEL_TOPIC, vault_id), (vault.owner, refund_amount));
         Ok(())
     }
 
@@ -914,12 +922,28 @@ impl TtlVaultContract {
             Self::remove_owner_vault_id(&env, &old_owner, vault_id);
             Self::add_owner_vault_id(&env, &new_owner, vault_id);
         }
-        vault.owner = new_owner;
+        vault.owner = new_owner.clone();
         Self::save_vault(&env, vault_id, &vault);
+        env.events().publish((OWNERSHIP_TOPIC, vault_id), (old_owner, new_owner));
         Ok(())
     }
 
     // --- helpers ---
+
+    fn paginate(env: &Env, all: Vec<u64>, page: u32, page_size: u32) -> Vec<u64> {
+        if page_size == 0 {
+            return Vec::new(env);
+        }
+        let start = (page as u64).saturating_mul(page_size as u64);
+        let len = all.len() as u64;
+        let mut result = Vec::new(env);
+        let mut i = start;
+        while i < len && i < start + page_size as u64 {
+            result.push_back(all.get(i as u32).unwrap());
+            i += 1;
+        }
+        result
+    }
 
     fn assert_not_paused(env: &Env) {
         if Self::load_paused(env) {

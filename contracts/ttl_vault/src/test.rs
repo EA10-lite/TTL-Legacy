@@ -191,7 +191,7 @@ fn test_get_vaults_by_owner_tracks_multiple_vaults() {
     let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
 
     assert_eq!(
-        client.get_vaults_by_owner(&owner),
+        client.get_vaults_by_owner(&owner, &0u32, &10u32),
         vec![&env, vault_id_1, vault_id_2]
     );
 }
@@ -214,14 +214,14 @@ fn test_transfer_ownership_updates_owner_and_owner_index() {
     let new_owner = Address::generate(&env);
 
     let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
-    assert_eq!(client.get_vaults_by_owner(&owner), vec![&env, vault_id]);
-    assert_eq!(client.get_vaults_by_owner(&new_owner), vec![&env]);
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env]);
 
     client.transfer_ownership(&vault_id, &new_owner);
 
     assert_eq!(client.get_vault(&vault_id).owner, new_owner);
-    assert_eq!(client.get_vaults_by_owner(&owner), vec![&env]);
-    assert_eq!(client.get_vaults_by_owner(&new_owner), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env, vault_id]);
 }
 
 #[test]
@@ -419,18 +419,18 @@ fn test_get_vaults_by_beneficiary_tracks_vaults() {
     let (env, owner, beneficiary, _, _, client) = setup();
     let other_beneficiary = Address::generate(&env);
 
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32), vec![&env]);
 
     let vault_id_1 = client.create_vault(&owner, &beneficiary, &100u64);
     let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
     let _vault_id_3 = client.create_vault(&owner, &other_beneficiary, &300u64);
 
     assert_eq!(
-        client.get_vaults_by_beneficiary(&beneficiary),
+        client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32),
         vec![&env, vault_id_1, vault_id_2]
     );
     assert_eq!(
-        client.get_vaults_by_beneficiary(&other_beneficiary),
+        client.get_vaults_by_beneficiary(&other_beneficiary, &0u32, &10u32),
         vec![&env, _vault_id_3]
     );
 }
@@ -439,7 +439,7 @@ fn test_get_vaults_by_beneficiary_tracks_vaults() {
 fn test_get_vaults_by_beneficiary_empty_for_unknown() {
     let (env, _, _, _, _, client) = setup();
     let stranger = Address::generate(&env);
-    assert_eq!(client.get_vaults_by_beneficiary(&stranger), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&stranger, &0u32, &10u32), vec![&env]);
 }
 
 // ---- Issue 2: upgrade ----
@@ -646,4 +646,103 @@ fn test_deposit_rejects_balance_overflow() {
     let result = client.try_deposit(&vault_id, &owner, &1i128);
 
     assert!(result.is_err(), "expected overflow error on deposit exceeding i128::MAX");
+}
+
+// ---- Pagination tests ----
+
+#[test]
+fn test_get_vaults_by_owner_pagination() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let id1 = client.create_vault(&owner, &beneficiary, &100u64);
+    let id2 = client.create_vault(&owner, &beneficiary, &200u64);
+    let id3 = client.create_vault(&owner, &beneficiary, &300u64);
+
+    // page 0, size 2 => [id1, id2]
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &2u32), vec![&env, id1, id2]);
+    // page 1, size 2 => [id3]
+    assert_eq!(client.get_vaults_by_owner(&owner, &1u32, &2u32), vec![&env, id3]);
+    // page 2, size 2 => []
+    assert_eq!(client.get_vaults_by_owner(&owner, &2u32, &2u32), vec![&env]);
+    // page_size 0 => []
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &0u32), vec![&env]);
+}
+
+#[test]
+fn test_get_vaults_by_beneficiary_pagination() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let id1 = client.create_vault(&owner, &beneficiary, &100u64);
+    let id2 = client.create_vault(&owner, &beneficiary, &200u64);
+    let id3 = client.create_vault(&owner, &beneficiary, &300u64);
+
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &2u32), vec![&env, id1, id2]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &1u32, &2u32), vec![&env, id3]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &2u32, &2u32), vec![&env]);
+}
+
+// ---- check_in event topic constant test ----
+
+#[test]
+fn test_check_in_emits_event_with_check_in_topic() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    client.check_in(&vault_id, &owner);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
+        if topics.len() < 1 {
+            return false;
+        }
+        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        topic0.map(|s| s == types::CHECK_IN_TOPIC).unwrap_or(false)
+    });
+    assert!(found, "check_in event with CHECK_IN_TOPIC not emitted");
+}
+
+// ---- cancel_vault event test ----
+
+#[test]
+fn test_cancel_vault_emits_cancel_event() {
+    let (env, owner, beneficiary, _, token_address, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+
+    client.cancel_vault(&vault_id);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
+        if topics.len() < 1 {
+            return false;
+        }
+        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        topic0.map(|s| s == types::CANCEL_TOPIC).unwrap_or(false)
+    });
+    assert!(found, "cancel event not emitted");
+    let _ = token_address;
+}
+
+// ---- transfer_ownership event test ----
+
+#[test]
+fn test_transfer_ownership_emits_ownership_event() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let new_owner = Address::generate(&env);
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    client.transfer_ownership(&vault_id, &new_owner);
+
+    let events = env.events().all();
+    let found = events.iter().any(|e| {
+        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
+        if topics.len() < 1 {
+            return false;
+        }
+        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
+        topic0.map(|s| s == types::OWNERSHIP_TOPIC).unwrap_or(false)
+    });
+    assert!(found, "ownership transfer event not emitted");
 }
