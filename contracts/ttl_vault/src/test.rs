@@ -718,6 +718,20 @@ fn test_trigger_release_emits_event_with_zero_balance() {
     assert!(release_event.is_some(), "release event not emitted for zero-balance vault");
 }
 
+// Regression test for #97: trigger_release must return structured error code 16
+// (ContractError::NotExpired) when the vault TTL has not yet lapsed, instead of
+// panicking with a raw string.
+#[test]
+fn test_trigger_release_returns_not_expired_error_before_ttl_lapses() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    // vault is still within its check-in interval — must not release
+    let err = client.try_trigger_release(&vault_id).unwrap_err().unwrap();
+    assert_eq!(err, soroban_sdk::Error::from_contract_error(16));
+}
+
 // ---- Issue #105: set_beneficiaries owner-as-beneficiary guard ----
 
 #[test]
