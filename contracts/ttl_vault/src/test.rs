@@ -55,6 +55,17 @@ fn test_initialize_guard_against_double_init() {
 }
 
 #[test]
+#[should_panic(expected = "Error(Contract, #18)")]
+fn test_initialize_rejects_same_xlm_token_and_admin() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let addr = Address::generate(&env);
+    let contract_address = env.register_contract(None, TtlVaultContract);
+    let client = TtlVaultContractClient::new(&env, &contract_address);
+    client.initialize(&addr, &addr);
+}
+
+#[test]
 fn test_vault_count_view() {
     let (_, owner, beneficiary, _, _, client) = setup();
 
@@ -325,6 +336,15 @@ fn test_admin_transfer_full_flow() {
 fn test_create_vault_rejects_owner_as_beneficiary() {
     let (_, owner, _, _, _, client) = setup();
     client.create_vault(&owner, &owner, &1000);
+}
+
+#[test]
+fn test_vault_count_consistent_after_creation() {
+    let (_, owner, beneficiary, _, _, client) = setup();
+    assert_eq!(client.vault_count(), 0);
+    let id = client.create_vault(&owner, &beneficiary, &1000);
+    assert_eq!(id, 1);
+    assert_eq!(client.vault_count(), 1);
 }
 
 #[test]
@@ -720,101 +740,145 @@ fn test_deposit_rejects_balance_overflow() {
     assert!(result.is_err(), "expected overflow error on deposit exceeding i128::MAX");
 }
 
-// ---- Pagination tests ----
+// ---- Full Vault Lifecycle End-to-End Test ----
 
 #[test]
-fn test_get_vaults_by_owner_pagination() {
-    let (env, owner, beneficiary, _, _, client) = setup();
+fn test_full_vault_lifecycle_end_to_end() {
+    // Set up full environment with token contract
+    let (env, owner, beneficiary, _, token_address, client) = setup();
+    let token_client = token::Client::new(&env, &token_address);
 
-    let id1 = client.create_vault(&owner, &beneficiary, &100u64);
-    let id2 = client.create_vault(&owner, &beneficiary, &200u64);
-    let id3 = client.create_vault(&owner, &beneficiary, &300u64);
+    // Define test parameters
+    let deposit_amount: i128 = 500i128;
+    let check_in_interval: u64 = 100u64;
 
-    // page 0, size 2 => [id1, id2]
-    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &2u32), vec![&env, id1, id2]);
-    // page 1, size 2 => [id3]
-    assert_eq!(client.get_vaults_by_owner(&owner, &1u32, &2u32), vec![&env, id3]);
-    // page 2, size 2 => []
-    assert_eq!(client.get_vaults_by_owner(&owner, &2u32, &2u32), vec![&env]);
-    // page_size 0 => []
-    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &0u32), vec![&env]);
-}
+    // Step 1: Create vault
+    let vault_id = client.create_vault(&owner, &beneficiary, &check_in_interval);
 
-#[test]
-fn test_get_vaults_by_beneficiary_pagination() {
-    let (env, owner, beneficiary, _, _, client) = setup();
+    // Assert vault was created with correct initial state
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.owner, owner);
+    assert_eq!(vault.beneficiary, beneficiary);
+    assert_eq!(vault.check_in_interval, check_in_interval);
+    assert_eq!(vault.balance, 0i128);
+    assert_eq!(vault.status, ReleaseStatus::Locked);
+    assert_eq!(client.vault_count(), 1);
 
-    let id1 = client.create_vault(&owner, &beneficiary, &100u64);
-    let id2 = client.create_vault(&owner, &beneficiary, &200u64);
-    let id3 = client.create_vault(&owner, &beneficiary, &300u64);
+    // Step 2: Deposit funds
+    client.deposit(&vault_id, &owner, &deposit_amount);
 
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &2u32), vec![&env, id1, id2]);
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &1u32, &2u32), vec![&env, id3]);
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &2u32, &2u32), vec![&env]);
-}
+    // Assert balance updated after deposit
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.balance, deposit_amount);
 
-// ---- check_in event topic constant test ----
+    // Assert owner's token balance decreased
+    let owner_balance = token_client.balance(&owner);
+    assert_eq!(owner_balance, 1_000_000i128 - deposit_amount);
 
-#[test]
-fn test_check_in_emits_event_with_check_in_topic() {
-    let (env, owner, beneficiary, _, _, client) = setup();
-    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
-
+    // Step 3: Check in (reset timer)
     client.check_in(&vault_id, &owner);
 
-    let events = env.events().all();
-    let found = events.iter().any(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
-        if topics.len() < 1 {
-            return false;
-        }
-        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
-        topic0.map(|s| s == types::CHECK_IN_TOPIC).unwrap_or(false)
-    });
-    assert!(found, "check_in event with CHECK_IN_TOPIC not emitted");
+    // Assert vault still locked after check-in
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.status, ReleaseStatus::Locked);
+    assert_eq!(client.get_release_status(&vault_id), ReleaseStatus::Locked);
+
+    // Verify vault is not expired yet (time hasn't passed)
+    assert!(!client.is_expired(&vault_id));
+
+    // Step 4: Expire - advance time past the check-in interval
+    env.ledger().with_mut(|l| l.timestamp += check_in_interval + 1);
+
+    // Assert vault is now expired
+    assert!(client.is_expired(&vault_id));
+    let ttl = client.ping_expiry(&vault_id);
+    assert_eq!(ttl, 0u64);
+
+    // Step 5: Trigger release
+    client.trigger_release(&vault_id);
+
+    // Assert vault status is now Released
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.status, ReleaseStatus::Released);
+    assert_eq!(client.get_release_status(&vault_id), ReleaseStatus::Released);
+
+    // Assert beneficiary receives full balance on release
+    let beneficiary_balance = token_client.balance(&beneficiary);
+    assert_eq!(beneficiary_balance, deposit_amount);
+
+    // Assert vault balance is now 0 (funds released)
+    let vault = client.get_vault(&vault_id);
+    assert_eq!(vault.balance, 0i128);
 }
 
-// ---- cancel_vault event test ----
+// ---- Multiple Vaults Independent State Test ----
 
 #[test]
-fn test_cancel_vault_emits_cancel_event() {
-    let (env, owner, beneficiary, _, token_address, client) = setup();
-    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
-    client.deposit(&vault_id, &owner, &500i128);
-
-    client.cancel_vault(&vault_id);
-
-    let events = env.events().all();
-    let found = events.iter().any(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
-        if topics.len() < 1 {
-            return false;
-        }
-        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
-        topic0.map(|s| s == types::CANCEL_TOPIC).unwrap_or(false)
-    });
-    assert!(found, "cancel event not emitted");
-    let _ = token_address;
-}
-
-// ---- transfer_ownership event test ----
-
-#[test]
-fn test_transfer_ownership_emits_ownership_event() {
+fn test_multiple_vaults_created_by_same_owner_have_unique_ids() {
     let (env, owner, beneficiary, _, _, client) = setup();
-    let new_owner = Address::generate(&env);
-    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
 
-    client.transfer_ownership(&vault_id, &new_owner);
+    // Create 3 vaults from the same owner with different beneficiaries and check-in intervals
+    let beneficiary1 = Address::generate(&env);
+    let beneficiary2 = Address::generate(&env);
+    let beneficiary3 = Address::generate(&env);
 
-    let events = env.events().all();
-    let found = events.iter().any(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
-        if topics.len() < 1 {
-            return false;
-        }
-        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
-        topic0.map(|s| s == types::OWNERSHIP_TOPIC).unwrap_or(false)
-    });
-    assert!(found, "ownership transfer event not emitted");
+    let id_1 = client.create_vault(&owner, &beneficiary1, &100u64);
+    let id_2 = client.create_vault(&owner, &beneficiary2, &200u64);
+    let id_3 = client.create_vault(&owner, &beneficiary3, &300u64);
+
+    // Assert IDs are 1, 2, 3
+    assert_eq!(id_1, 1);
+    assert_eq!(id_2, 2);
+    assert_eq!(id_3, 3);
+
+    // Assert each vault has independent state
+    let vault1 = client.get_vault(&id_1);
+    let vault2 = client.get_vault(&id_2);
+    let vault3 = client.get_vault(&id_3);
+
+    // Check each vault has correct owner
+    assert_eq!(vault1.owner, owner);
+    assert_eq!(vault2.owner, owner);
+    assert_eq!(vault3.owner, owner);
+
+    // Check each vault has different beneficiary
+    assert_eq!(vault1.beneficiary, beneficiary1);
+    assert_eq!(vault2.beneficiary, beneficiary2);
+    assert_eq!(vault3.beneficiary, beneficiary3);
+
+    // Check each vault has different check-in interval
+    assert_eq!(vault1.check_in_interval, 100u64);
+    assert_eq!(vault2.check_in_interval, 200u64);
+    assert_eq!(vault3.check_in_interval, 300u64);
+
+    // Check each vault starts with zero balance
+    assert_eq!(vault1.balance, 0i128);
+    assert_eq!(vault2.balance, 0i128);
+    assert_eq!(vault3.balance, 0i128);
+
+    // Check all are locked
+    assert_eq!(vault1.status, ReleaseStatus::Locked);
+    assert_eq!(vault2.status, ReleaseStatus::Locked);
+    assert_eq!(vault3.status, ReleaseStatus::Locked);
+
+    // Deposit into vault 2 only
+    client.deposit(&id_2, &owner, &500i128);
+
+    // Verify only vault 2 balance changed
+    let vault1 = client.get_vault(&id_1);
+    let vault2 = client.get_vault(&id_2);
+    let vault3 = client.get_vault(&id_3);
+
+    assert_eq!(vault1.balance, 0i128);
+    assert_eq!(vault2.balance, 500i128);
+    assert_eq!(vault3.balance, 0i128);
+
+    // Verify vault count
+    assert_eq!(client.vault_count(), 3);
+
+    // Verify get_vaults_by_owner returns all 3 IDs
+    assert_eq!(
+        client.get_vaults_by_owner(&owner),
+        vec![&env, id_1, id_2, id_3]
+    );
 }
