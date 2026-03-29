@@ -834,3 +834,22 @@ fn test_partial_release_without_multi_beneficiary_sends_to_primary() {
     assert_eq!(client.get_vault(&vault_id).balance, 600i128);
     assert_eq!(client.get_release_status(&vault_id), ReleaseStatus::Locked);
 }
+
+#[test]
+fn test_update_beneficiary_updates_index() {
+    let (env, owner, old_beneficiary, _, _, client) = setup();
+    let new_beneficiary = Address::generate(&env);
+
+    let vault_id = client.create_vault(&owner, &old_beneficiary, &100u64);
+
+    // old beneficiary sees the vault, new one does not
+    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary), vec![&env]);
+
+    client.update_beneficiary(&vault_id, &new_beneficiary);
+
+    // old beneficiary no longer sees the vault
+    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary), vec![&env]);
+    // new beneficiary now sees the vault
+    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary), vec![&env, vault_id]);
+}

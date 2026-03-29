@@ -881,9 +881,14 @@ impl TtlVaultContract {
             panic_with_error!(&env, ContractError::InvalidBeneficiary);
         }
 
-        vault.beneficiary = new_beneficiary;
+        let old_beneficiary = vault.beneficiary.clone();
+        vault.beneficiary = new_beneficiary.clone();
         Self::save_vault(&env, vault_id, &vault);
-        env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
+
+        if old_beneficiary != new_beneficiary {
+            Self::remove_beneficiary_vault_id(&env, &old_beneficiary, vault_id);
+            Self::add_beneficiary_vault_id(&env, &new_beneficiary, vault_id);
+        }
     }
 
     /// Updates the check-in interval for a vault.
@@ -1141,6 +1146,17 @@ impl TtlVaultContract {
         let mut vault_ids = Self::load_beneficiary_vault_ids(env, beneficiary);
         vault_ids.push_back(vault_id);
         Self::save_beneficiary_vault_ids(env, beneficiary, &vault_ids);
+    }
+
+    fn remove_beneficiary_vault_id(env: &Env, beneficiary: &Address, vault_id: u64) {
+        let vault_ids = Self::load_beneficiary_vault_ids(env, beneficiary);
+        let mut next_ids = Vec::new(env);
+        for id in vault_ids.iter() {
+            if id != vault_id {
+                next_ids.push_back(id);
+            }
+        }
+        Self::save_beneficiary_vault_ids(env, beneficiary, &next_ids);
     }
 
     fn assert_interval_in_bounds(env: &Env, interval: u64) {
