@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["contracts/ttl_vault"]
+members = ["contracts/ttl_vault", "contracts/zk_verifier"]
 
 [profile.release]
 opt-level = "z"
