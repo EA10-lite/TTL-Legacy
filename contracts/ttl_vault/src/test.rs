@@ -226,7 +226,7 @@ fn test_get_vaults_by_owner_tracks_multiple_vaults() {
     let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
 
     assert_eq!(
-        client.get_vaults_by_owner(&owner, &0u32, &10u32),
+        client.get_vaults_by_owner(&owner, &None, &0u32, &10u32),
         vec![&env, vault_id_1, vault_id_2]
     );
 }
@@ -275,14 +275,14 @@ fn test_transfer_ownership_updates_owner_and_owner_index() {
     let new_owner = Address::generate(&env);
 
     let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
-    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env, vault_id]);
-    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_owner(&owner, &None, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &None, &0u32, &10u32), vec![&env]);
 
     client.transfer_ownership(&vault_id, &owner, &new_owner);
 
     assert_eq!(client.get_vault(&vault_id).owner, new_owner);
-    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env]);
-    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_owner(&owner, &None, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &None, &0u32, &10u32), vec![&env, vault_id]);
 }
 
 /// Invariant: owner and beneficiary must always be distinct.
@@ -310,13 +310,13 @@ fn test_transfer_ownership_preserves_beneficiary_index() {
     let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
 
     // beneficiary index contains the vault before transfer
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &None, &0u32, &10u32), vec![&env, vault_id]);
 
     client.transfer_ownership(&vault_id, &owner, &new_owner);
 
     // vault.beneficiary is unchanged — index must still be intact
     assert_eq!(client.get_vault(&vault_id).beneficiary, beneficiary);
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &None, &0u32, &10u32), vec![&env, vault_id]);
 }
 
 #[test]
@@ -553,18 +553,18 @@ fn test_get_vaults_by_beneficiary_tracks_vaults() {
     let (env, owner, beneficiary, _, _, client) = setup();
     let other_beneficiary = Address::generate(&env);
 
-    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&beneficiary, &None, &0u32, &10u32), vec![&env]);
 
     let vault_id_1 = client.create_vault(&owner, &beneficiary, &100u64);
     let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
     let _vault_id_3 = client.create_vault(&owner, &other_beneficiary, &300u64);
 
     assert_eq!(
-        client.get_vaults_by_beneficiary(&beneficiary, &0u32, &10u32),
+        client.get_vaults_by_beneficiary(&beneficiary, &None, &0u32, &10u32),
         vec![&env, vault_id_1, vault_id_2]
     );
     assert_eq!(
-        client.get_vaults_by_beneficiary(&other_beneficiary, &0u32, &10u32),
+        client.get_vaults_by_beneficiary(&other_beneficiary, &None, &0u32, &10u32),
         vec![&env, _vault_id_3]
     );
 }
@@ -573,7 +573,7 @@ fn test_get_vaults_by_beneficiary_tracks_vaults() {
 fn test_get_vaults_by_beneficiary_empty_for_unknown() {
     let (env, _, _, _, _, client) = setup();
     let stranger = Address::generate(&env);
-    assert_eq!(client.get_vaults_by_beneficiary(&stranger, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&stranger, &None, &0u32, &10u32), vec![&env]);
 }
 
 // ---- Issue 2: upgrade ----
@@ -893,15 +893,180 @@ fn test_update_beneficiary_updates_index() {
     let vault_id = client.create_vault(&owner, &old_beneficiary, &100u64);
 
     // old beneficiary sees the vault, new one does not
-    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary, &0u32, &10u32), vec![&env, vault_id]);
-    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary, &None, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary, &None, &0u32, &10u32), vec![&env]);
 
     client.update_beneficiary(&vault_id, &owner, &new_beneficiary);
 
     // old beneficiary no longer sees the vault
-    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary, &0u32, &10u32), vec![&env]);
+    assert_eq!(client.get_vaults_by_beneficiary(&old_beneficiary, &None, &0u32, &10u32), vec![&env]);
     // new beneficiary now sees the vault
-    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary, &0u32, &10u32), vec![&env, vault_id]);
+    assert_eq!(client.get_vaults_by_beneficiary(&new_beneficiary, &None, &0u32, &10u32), vec![&env, vault_id]);
+}
+
+
+#[test]
+#[should_panic(expected = "Error(Contract, #20)")]
+fn test_create_vault_before_initialize_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let beneficiary = Address::generate(&env);
+    let contract_address = env.register_contract(None, TtlVaultContract);
+    let client = TtlVaultContractClient::new(&env, &contract_address);
+    // Call create_vault without initialize
+    client.create_vault(&owner, &beneficiary, &100u64);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #20)")]
+fn test_deposit_before_initialize_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let owner = Address::generate(&env);
+    let contract_address = env.register_contract(None, TtlVaultContract);
+    let client = TtlVaultContractClient::new(&env, &contract_address);
+    // Call deposit without initialize
+    client.deposit(&1u64, &owner, &100i128);
+}
+
+#[test]
+#[should_panic(expected = "Error(Contract, #20)")]
+fn test_get_admin_before_initialize_returns_not_initialized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_address = env.register_contract(None, TtlVaultContract);
+    let client = TtlVaultContractClient::new(&env, &contract_address);
+    // Call get_admin without initialize
+    client.get_admin();
+}
+
+
+#[test]
+fn test_ping_expiry_no_event_for_released_vault() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+    
+    // Expire the vault
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.trigger_release(&vault_id);
+    
+    // ping_expiry should not emit an event for a released vault
+    let events_before = env.events().all();
+    let ttl = client.ping_expiry(&vault_id);
+    let events_after = env.events().all();
+    
+    // No new ping_expiry event should be emitted
+    assert_eq!(ttl, 0);
+    assert_eq!(events_before.len(), events_after.len());
+}
+
+#[test]
+fn test_ping_expiry_no_event_for_cancelled_vault() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+    
+    // Cancel the vault
+    client.cancel_vault(&vault_id);
+    
+    // ping_expiry should not emit an event for a cancelled vault
+    let events_before = env.events().all();
+    let ttl = client.ping_expiry(&vault_id);
+    let events_after = env.events().all();
+    
+    // No new ping_expiry event should be emitted
+    assert_eq!(ttl, 0);
+    assert_eq!(events_before.len(), events_after.len());
+}
+
+
+#[test]
+fn test_get_vaults_by_owner_with_status_filter() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let vault_id_1 = client.create_vault(&owner, &beneficiary, &100u64);
+    let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
+    
+    client.deposit(&vault_id_1, &owner, &500i128);
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.trigger_release(&vault_id_1);
+    
+    // All vaults (no filter)
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &None, &0u32, &10u32),
+        vec![&env, vault_id_1, vault_id_2]
+    );
+    
+    // Only locked vaults
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &Some(ReleaseStatus::Locked), &0u32, &10u32),
+        vec![&env, vault_id_2]
+    );
+    
+    // Only released vaults
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &Some(ReleaseStatus::Released), &0u32, &10u32),
+        vec![&env, vault_id_1]
+    );
+    
+    // No cancelled vaults
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &Some(ReleaseStatus::Cancelled), &0u32, &10u32),
+        vec![&env]
+    );
+}
+
+#[test]
+fn test_get_vaults_by_beneficiary_with_status_filter() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let vault_id_1 = client.create_vault(&owner, &beneficiary, &100u64);
+    let vault_id_2 = client.create_vault(&owner, &beneficiary, &200u64);
+    
+    client.deposit(&vault_id_1, &owner, &500i128);
+    env.ledger().with_mut(|l| l.timestamp += 200);
+    client.trigger_release(&vault_id_1);
+    
+    // All vaults (no filter)
+    assert_eq!(
+        client.get_vaults_by_beneficiary(&beneficiary, &None, &0u32, &10u32),
+        vec![&env, vault_id_1, vault_id_2]
+    );
+    
+    // Only locked vaults
+    assert_eq!(
+        client.get_vaults_by_beneficiary(&beneficiary, &Some(ReleaseStatus::Locked), &0u32, &10u32),
+        vec![&env, vault_id_2]
+    );
+    
+    // Only released vaults
+    assert_eq!(
+        client.get_vaults_by_beneficiary(&beneficiary, &Some(ReleaseStatus::Released), &0u32, &10u32),
+        vec![&env, vault_id_1]
+    );
+}
+
+#[test]
+fn test_get_vaults_by_owner_with_cancelled_status_filter() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    client.deposit(&vault_id, &owner, &500i128);
+    client.cancel_vault(&vault_id);
+    
+    // Only cancelled vaults
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &Some(ReleaseStatus::Cancelled), &0u32, &10u32),
+        vec![&env, vault_id]
+    );
+    
+    // No locked vaults
+    assert_eq!(
+        client.get_vaults_by_owner(&owner, &Some(ReleaseStatus::Locked), &0u32, &10u32),
+        vec![&env]
+    );
 }
 
 

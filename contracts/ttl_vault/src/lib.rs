@@ -58,6 +58,7 @@ pub enum ContractError {
     InvalidBeneficiary = 17,
     BalanceOverflow = 18,
     VaultExpired = 19,
+    NotInitialized = 20,
 }
 
 #[contract]
@@ -311,7 +312,10 @@ impl TtlVaultContract {
         // VaultCount is updated only after all vault data is written. If any
         // prior storage call panics, the count is not advanced, keeping it
         // consistent with the number of successfully persisted vaults.
-        env.storage().instance().set(&DataKey::VaultCount, &vault_id);
+        // Store in persistent storage to survive instance TTL expiry.
+        let key = DataKey::VaultCount;
+        env.storage().persistent().set(&key, &vault_id);
+        env.storage().persistent().extend_ttl(&key, VAULT_TTL_THRESHOLD, VAULT_TTL_LEDGERS);
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
         env.events().publish(
             (VAULT_CREATED_TOPIC,),
@@ -575,7 +579,7 @@ impl TtlVaultContract {
     ///
     /// This function can be called by anyone to monitor vault expiry status.
     /// If the remaining TTL is less than `EXPIRY_WARNING_THRESHOLD` (24 hours),
-    /// a warning event is emitted.
+    /// a warning event is emitted. No event is emitted for Released or Cancelled vaults.
     ///
     /// # Arguments
     /// * `env` - The Soroban environment
@@ -584,9 +588,14 @@ impl TtlVaultContract {
     /// # Returns
     /// The remaining TTL in seconds (0 if expired)
     pub fn ping_expiry(env: Env, vault_id: u64) -> u64 {
-        if Self::try_load_vault(&env, vault_id).is_none() {
-            panic_with_error!(&env, ContractError::VaultNotFound);
+        let vault = Self::try_load_vault(&env, vault_id)
+            .unwrap_or_else(|| panic_with_error!(&env, ContractError::VaultNotFound));
+        
+        // Only emit events for Locked vaults
+        if vault.status != ReleaseStatus::Locked {
+            return 0;
         }
+        
         let ttl = Self::get_ttl_remaining(env.clone(), vault_id).unwrap_or(0);
         if ttl < EXPIRY_WARNING_THRESHOLD {
             env.events().publish((PING_EXPIRY_TOPIC, vault_id), ttl);
@@ -806,14 +815,28 @@ impl TtlVaultContract {
     /// # Arguments
     /// * `env` - The Soroban environment
     /// * `owner` - The owner address
+    /// * `status_filter` - Optional status filter (None returns all vaults, Some(status) returns only vaults with that status)
     /// * `page` - Zero-based page index
     /// * `page_size` - Number of items per page
     ///
     /// # Returns
     /// A vector of vault IDs for the requested page
-    pub fn get_vaults_by_owner(env: Env, owner: Address, page: u32, page_size: u32) -> Vec<u64> {
+    pub fn get_vaults_by_owner(env: Env, owner: Address, status_filter: Option<ReleaseStatus>, page: u32, page_size: u32) -> Vec<u64> {
         let all = Self::load_owner_vault_ids(&env, &owner);
-        Self::paginate(&env, all, page, page_size)
+        let filtered = if let Some(status) = status_filter {
+            let mut result = Vec::new(&env);
+            for vault_id in all.iter() {
+                if let Some(vault) = Self::try_load_vault(&env, vault_id) {
+                    if vault.status == status {
+                        result.push_back(vault_id);
+                    }
+                }
+            }
+            result
+        } else {
+            all
+        };
+        Self::paginate(&env, filtered, page, page_size)
     }
 
     /// Returns a paginated slice of vault IDs where a specific address is the beneficiary.
@@ -821,14 +844,28 @@ impl TtlVaultContract {
     /// # Arguments
     /// * `env` - The Soroban environment
     /// * `beneficiary` - The beneficiary address
+    /// * `status_filter` - Optional status filter (None returns all vaults, Some(status) returns only vaults with that status)
     /// * `page` - Zero-based page index
     /// * `page_size` - Number of items per page
     ///
     /// # Returns
     /// A vector of vault IDs for the requested page
-    pub fn get_vaults_by_beneficiary(env: Env, beneficiary: Address, page: u32, page_size: u32) -> Vec<u64> {
+    pub fn get_vaults_by_beneficiary(env: Env, beneficiary: Address, status_filter: Option<ReleaseStatus>, page: u32, page_size: u32) -> Vec<u64> {
         let all = Self::load_beneficiary_vault_ids(&env, &beneficiary);
-        Self::paginate(&env, all, page, page_size)
+        let filtered = if let Some(status) = status_filter {
+            let mut result = Vec::new(&env);
+            for vault_id in all.iter() {
+                if let Some(vault) = Self::try_load_vault(&env, vault_id) {
+                    if vault.status == status {
+                        result.push_back(vault_id);
+                    }
+                }
+            }
+            result
+        } else {
+            all
+        };
+        Self::paginate(&env, filtered, page, page_size)
     }
 
     /// Returns the remaining time-to-live (TTL) for a vault in seconds.
@@ -873,7 +910,7 @@ impl TtlVaultContract {
     /// # Returns
     /// The total vault count
     pub fn vault_count(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::VaultCount).unwrap_or(0u64)
+        env.storage().persistent().get(&DataKey::VaultCount).unwrap_or(0u64)
     }
 
     /// Returns the address of the XLM token used by this contract.
@@ -1108,11 +1145,11 @@ impl TtlVaultContract {
         env.storage()
             .instance()
             .get(&DataKey::Admin)
-            .unwrap_or_else(|| panic_with_error!(env, ContractError::VaultNotFound))
+            .unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
     }
 
     fn load_token(env: &Env) -> Address {
-        env.storage().instance().get(&DataKey::TokenAddress).unwrap_or_else(|| panic_with_error!(env, ContractError::VaultNotFound))
+        env.storage().instance().get(&DataKey::TokenAddress).unwrap_or_else(|| panic_with_error!(env, ContractError::NotInitialized))
     }
 
     fn load_vault(env: &Env, vault_id: u64) -> Vault {
