@@ -693,6 +693,8 @@ fn test_withdraw_emits_event() {
 }
 
 #[test]
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
 fn test_trigger_release_emits_event_with_zero_balance() {
     let (env, owner, beneficiary, _, _, client) = setup();
 
@@ -700,22 +702,8 @@ fn test_trigger_release_emits_event_with_zero_balance() {
     let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
     env.ledger().with_mut(|l| l.timestamp += 200);
 
-    // should succeed and emit a release event with amount: 0
+    // should panic with EmptyVault error
     client.trigger_release(&vault_id);
-
-    assert_eq!(client.get_release_status(&vault_id), ReleaseStatus::Released);
-
-    let events = env.events().all();
-    let release_event = events.iter().find(|e| {
-        let topics: soroban_sdk::Vec<soroban_sdk::Val> = e.1.clone().into_val(&env);
-        if topics.len() < 1 {
-            return false;
-        }
-        let topic0: Result<soroban_sdk::Symbol, _> = topics.get(0).unwrap().try_into_val(&env);
-        topic0.map(|s| s == soroban_sdk::symbol_short!("release")).unwrap_or(false)
-    });
-
-    assert!(release_event.is_some(), "release event not emitted for zero-balance vault");
 }
 
 // ---- Issue #105: set_beneficiaries owner-as-beneficiary guard ----
@@ -915,4 +903,30 @@ fn test_set_max_then_min_in_order_succeeds() {
     client.set_min_check_in_interval(&100u64);
     assert_eq!(client.get_min_check_in_interval(), Some(100u64));
     assert_eq!(client.get_max_check_in_interval(), Some(1_000u64));
+}
+
+
+#[test]
+#[should_panic(expected = "Error(Contract, #4)")]
+fn test_trigger_release_zero_balance_multi_beneficiary_returns_empty_vault() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let beneficiary2 = Address::generate(&env);
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+    
+    // Set multi-beneficiaries but don't deposit
+    client.set_beneficiaries(
+        &vault_id,
+        &owner,
+        &vec![
+            &env,
+            BeneficiaryEntry { address: beneficiary.clone(), bps: 5_000 },
+            BeneficiaryEntry { address: beneficiary2.clone(), bps: 5_000 },
+        ],
+    );
+
+    env.ledger().with_mut(|l| l.timestamp += 200);
+
+    // should panic with EmptyVault before iterating beneficiaries
+    client.trigger_release(&vault_id);
 }

@@ -526,12 +526,13 @@ impl TtlVaultContract {
             panic_with_error!(&env, ContractError::NotExpired);
         }
         let total = vault.balance;
+        if total == 0 {
+            panic_with_error!(&env, ContractError::EmptyVault);
+        }
         let xlm = token::Client::new(&env, &Self::load_token(&env));
 
         if vault.beneficiaries.is_empty() {
-            if total > 0 {
-                xlm.transfer(&env.current_contract_address(), &vault.beneficiary, &total);
-            }
+            xlm.transfer(&env.current_contract_address(), &vault.beneficiary, &total);
             env.events().publish(
                 (RELEASE_TOPIC,),
                 ReleaseEvent { vault_id, beneficiary: vault.beneficiary.clone(), amount: total },
