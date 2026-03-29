@@ -301,7 +301,10 @@ impl TtlVaultContract {
         // VaultCount is updated only after all vault data is written. If any
         // prior storage call panics, the count is not advanced, keeping it
         // consistent with the number of successfully persisted vaults.
-        env.storage().instance().set(&DataKey::VaultCount, &vault_id);
+        // Store in persistent storage to survive instance TTL expiry.
+        let key = DataKey::VaultCount;
+        env.storage().persistent().set(&key, &vault_id);
+        env.storage().persistent().extend_ttl(&key, VAULT_TTL_THRESHOLD, VAULT_TTL_LEDGERS);
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
         env.events().publish(
             (VAULT_CREATED_TOPIC,),
@@ -852,7 +855,7 @@ impl TtlVaultContract {
     /// # Returns
     /// The total vault count
     pub fn vault_count(env: Env) -> u64 {
-        env.storage().instance().get(&DataKey::VaultCount).unwrap_or(0u64)
+        env.storage().persistent().get(&DataKey::VaultCount).unwrap_or(0u64)
     }
 
     /// Returns the address of the XLM token used by this contract.
