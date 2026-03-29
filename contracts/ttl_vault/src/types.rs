@@ -12,6 +12,9 @@ pub const OWNERSHIP_TOPIC: Symbol = symbol_short!("own_xfer");
 /// Warning threshold in seconds. If TTL remaining < this value, ping_expiry emits an event.
 pub const EXPIRY_WARNING_THRESHOLD: u64 = 86_400; // 24 hours
 
+/// Maximum length for vault metadata string
+pub const MAX_METADATA_LEN: u32 = 256;
+
 #[contracttype]
 #[derive(Clone)]
 pub enum DataKey {

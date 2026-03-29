@@ -9,7 +9,7 @@ mod types;
 use types::{
     BeneficiaryEntry, DataKey, ReleaseEvent, ReleaseStatus, Vault, EXPIRY_WARNING_THRESHOLD,
     CANCEL_TOPIC, CHECK_IN_TOPIC, DEPOSIT_TOPIC, OWNERSHIP_TOPIC, PING_EXPIRY_TOPIC,
-    RELEASE_TOPIC, VAULT_CREATED_TOPIC, WITHDRAW_TOPIC,
+    RELEASE_TOPIC, VAULT_CREATED_TOPIC, WITHDRAW_TOPIC, MAX_METADATA_LEN,
 };
 
 #[cfg(test)]
@@ -720,6 +720,9 @@ impl TtlVaultContract {
     /// * `ContractError::AlreadyReleased` - If vault is not in Locked status
     pub fn update_metadata(env: Env, vault_id: u64, caller: Address, metadata: String) -> Result<(), ContractError> {
             caller.require_auth();
+            if metadata.len() > MAX_METADATA_LEN {
+                return Err(ContractError::InvalidAmount);
+            }
             let mut vault = Self::load_vault(&env, vault_id);
             if caller != vault.owner {
                 return Err(ContractError::NotOwner);
