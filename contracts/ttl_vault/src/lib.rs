@@ -55,10 +55,9 @@ pub enum ContractError {
     IntervalTooLow = 14,
     IntervalTooHigh = 15,
     NotExpired = 16,
-    InvalidBeneficiary = 11,
-    BalanceOverflow = 12,
-    VaultExpired = 17,
-    InvalidAdmin = 18,
+    InvalidBeneficiary = 17,
+    BalanceOverflow = 18,
+    VaultExpired = 19,
 }
 
 #[contract]
@@ -224,18 +223,19 @@ impl TtlVaultContract {
             .unwrap_or_else(|| panic_with_error!(&env, ContractError::VaultNotFound))
     }
 
-    /// Proposes a new admin. Only the current admin can call this.
-    /// The proposed address must call `accept_admin` to complete the transfer.
+    /// Proposes a new admin. The proposed admin must call `accept_admin` to complete the transfer.
     pub fn propose_admin(env: Env, new_admin: Address) {
         Self::require_admin(&env);
         env.storage().instance().set(&DataKey::PendingAdmin, &new_admin);
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
     }
 
-    /// Completes the admin transfer. Must be called by the pending admin.
-    ///
-    /// # Panics
-    /// Panics if there is no pending admin
+    /// Returns the pending admin address, if any.
+    pub fn get_pending_admin(env: Env) -> Option<Address> {
+        env.storage().instance().get(&DataKey::PendingAdmin)
+    }
+
+    /// Accepts a pending admin transfer. Must be called by the pending admin.
     pub fn accept_admin(env: Env) {
         let pending: Address = env
             .storage()
@@ -246,11 +246,6 @@ impl TtlVaultContract {
         env.storage().instance().set(&DataKey::Admin, &pending);
         env.storage().instance().remove(&DataKey::PendingAdmin);
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
-    }
-
-    /// Returns the pending admin address, if any.
-    pub fn get_pending_admin(env: Env) -> Option<Address> {
-        env.storage().instance().get(&DataKey::PendingAdmin)
     }
 
     // --- vault lifecycle ---
@@ -282,6 +277,8 @@ impl TtlVaultContract {
         if check_in_interval == 0 {
             panic_with_error!(&env, ContractError::InvalidInterval);
         }
+
+        Self::assert_interval_in_bounds(&env, check_in_interval);
 
         if owner == beneficiary {
             panic_with_error!(&env, ContractError::InvalidBeneficiary);
@@ -973,6 +970,12 @@ impl TtlVaultContract {
         new_owner.require_auth();
         if vault.status != ReleaseStatus::Locked {
             return Err(ContractError::AlreadyReleased);
+        }
+        // Invariant: owner and beneficiary must always be distinct addresses.
+        // BeneficiaryVaults index does not need updating here because the vault's
+        // beneficiary field is not changed by an ownership transfer.
+        if new_owner == vault.beneficiary {
+            return Err(ContractError::InvalidBeneficiary);
         }
         if old_owner != new_owner {
             Self::remove_owner_vault_id(&env, &old_owner, vault_id);
