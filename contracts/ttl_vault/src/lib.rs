@@ -285,12 +285,14 @@ impl TtlVaultContract {
         }
 
         let vault_id = Self::vault_count(env.clone()) + 1;
+        let timestamp = env.ledger().timestamp();
         let vault = Vault {
             owner: owner.clone(),
             beneficiary: beneficiary.clone(),
             balance: 0,
             check_in_interval,
-            last_check_in: env.ledger().timestamp(),
+            last_check_in: timestamp,
+            created_at: timestamp,
             status: ReleaseStatus::Locked,
             beneficiaries: Vec::new(&env),
             metadata: String::from_str(&env, ""),
@@ -305,7 +307,7 @@ impl TtlVaultContract {
         env.storage().instance().extend_ttl(INSTANCE_TTL_THRESHOLD, INSTANCE_TTL_LEDGERS);
         env.events().publish(
             (VAULT_CREATED_TOPIC,),
-            (vault_id, owner, beneficiary, check_in_interval),
+            (vault_id, owner, beneficiary, check_in_interval, timestamp),
         );
         vault_id
     }
