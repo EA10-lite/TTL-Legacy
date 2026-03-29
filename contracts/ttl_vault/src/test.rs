@@ -877,3 +877,27 @@ fn test_cancel_vault_refunds_full_balance_to_owner() {
     // Second cancel_vault call should fail
     assert!(client.try_cancel_vault(&vault_id).is_err());
 }
+
+#[test]
+fn test_transfer_ownership_updates_owner_index_and_blocks_old_owner() {
+    let (env, owner, beneficiary, _, _, client) = setup();
+    let new_owner = Address::generate(&env);
+
+    let vault_id = client.create_vault(&owner, &beneficiary, &100u64);
+
+    // old owner sees the vault
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env, vault_id]);
+    // new owner does not see the vault yet
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env]);
+
+    client.transfer_ownership(&vault_id, &owner, &new_owner);
+
+    // old owner no longer sees the vault
+    assert_eq!(client.get_vaults_by_owner(&owner, &0u32, &10u32), vec![&env]);
+    // new owner now sees the vault
+    assert_eq!(client.get_vaults_by_owner(&new_owner, &0u32, &10u32), vec![&env, vault_id]);
+
+    // old owner cannot call check_in
+    assert!(client.try_check_in(&vault_id, &owner).is_err());
+}
+}
