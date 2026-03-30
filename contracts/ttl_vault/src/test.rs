@@ -55,7 +55,7 @@ fn test_initialize_guard_against_double_init() {
 }
 
 #[test]
-#[should_panic(expected = "Error(Contract, #18)")]
+#[should_panic(expected = "Error(Contract, #21)")]
 fn test_initialize_rejects_same_xlm_token_and_admin() {
     let env = Env::default();
     env.mock_all_auths();
@@ -1234,7 +1234,6 @@ fn test_transfer_ownership_updates_owner_index_and_blocks_old_owner() {
 
     // old owner cannot call check_in
     assert!(client.try_check_in(&vault_id, &owner).is_err());
-}
 }
 
 // Regression test for #96: create_vault must assign sequential, non-duplicate vault IDs.

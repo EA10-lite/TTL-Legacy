@@ -59,6 +59,7 @@ pub enum ContractError {
     BalanceOverflow = 18,
     VaultExpired = 19,
     NotInitialized = 20,
+    DistinctAddressesRequired = 21,
 }
 
 #[contract]
@@ -87,7 +88,7 @@ impl TtlVaultContract {
             panic_with_error!(&env, ContractError::AlreadyInitialized);
         }
         if xlm_token == admin {
-            panic_with_error!(&env, ContractError::BalanceOverflow);
+            panic_with_error!(&env, ContractError::DistinctAddressesRequired);
         }
         admin.require_auth();
         env.storage().instance().set(&DataKey::TokenAddress, &xlm_token);
